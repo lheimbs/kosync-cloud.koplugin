@@ -96,7 +96,12 @@ local function incomeHasTable(conn_income)
 end
 
 function ProgressDB.onSync(local_path, cached_path, income_path)
-    logger.dbg("KOSyncCloud: onSync", local_path, cached_path, income_path)
+    -- NOTE: Unlike Statistics plugin, we intentionally don't use cached_path for deletion detection.
+    -- Progress entries are keyed by document digest and only updated, never explicitly deleted.
+    -- Stale entries (for removed books) are harmless and will be overwritten if the book is re-added.
+    -- The timestamp-based merge handles all conflict resolution.
+    _ = cached_path -- suppress unused warning
+    logger.dbg("KOSyncCloud: onSync", local_path, income_path)
     local conn_income = SQ3.open(income_path)
     local ok1, v1 = pcall(conn_income.rowexec, conn_income, "PRAGMA schema_version")
     if not ok1 or tonumber(v1) == 0 or not incomeHasTable(conn_income) then

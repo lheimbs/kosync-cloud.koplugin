@@ -136,19 +136,20 @@ local function promptSetup()
     })
 end
 
-local function runWithSyncModal(interactive, fn, message)
+local function runWithSyncModal(interactive, fn)
     if not interactive then
         logger.dbg("KOSyncCloud: sync (non-interactive)")
         return fn()
     end
 
     local modal = InfoMessage:new{
-        text = message or _("Syncing progress. Please wait…"),
+        text = _("Syncing progress. Please wait…"),
         timeout = nil,
         dismissable = false,
     }
     logger.dbg("KOSyncCloud: sync modal show")
     UIManager:show(modal)
+    UIManager:forceRePaint()
 
     local ok, err = pcall(fn)
     UIManager:close(modal)
@@ -156,7 +157,9 @@ local function runWithSyncModal(interactive, fn, message)
     if not ok then
         logger.err("KOSyncCloud: sync failed", err)
         showSyncError()
+        return false
     end
+    return true
 end
 
 function KOSyncCloud:onDispatcherRegisterActions()
@@ -434,7 +437,6 @@ function KOSyncCloud:setChecksumMethod(method)
 end
 
 function KOSyncCloud:canSync()
-    logger.dbg("KOSyncCloud: canSync", self.settings.sync_server ~= nil)
     return self.settings.sync_server ~= nil
 end
 
@@ -481,20 +483,11 @@ end
 
 function KOSyncCloud:syncToProgress(progress)
     logger.dbg("KOSyncCloud: syncToProgress", progress)
-    logger.dbg("KOSyncCloud: [Sync] progress to", progress)
     if self.ui.document.info.has_pages then
         self.ui:handleEvent(Event:new("GotoPage", tonumber(progress)))
     else
         self.ui:handleEvent(Event:new("GotoXPointer", progress))
     end
-end
-
-local function willRerunForServer(server, cb)
-    if not server then return false end
-    if server.type == "dropbox" then
-        return NetworkMgr:willRerunWhenOnline(cb)
-    end
-    return NetworkMgr:willRerunWhenConnected(cb)
 end
 
 function KOSyncCloud:updateProgress(ensure_networking, interactive, on_suspend)
@@ -512,11 +505,6 @@ function KOSyncCloud:updateProgress(ensure_networking, interactive, on_suspend)
         return
     end
 
-    if ensure_networking and willRerunForServer(self.settings.sync_server, function()
-        self:updateProgress(ensure_networking, interactive, on_suspend)
-    end) then
-        return
-    end
 
     local doc_digest = self:getDocumentDigest()
     if not doc_digest then
@@ -531,17 +519,19 @@ function KOSyncCloud:updateProgress(ensure_networking, interactive, on_suspend)
         and self.last_page_turn_timestamp or os.time()
 
     UIManager:nextTick(function()
-        runWithSyncModal(interactive, function()
+        local success = runWithSyncModal(interactive, function()
             ProgressDB.writeProgress(doc_digest, progress, percentage, timestamp, Device.model, self.device_id)
             SyncService.sync(self.settings.sync_server, ProgressDB.getPath(), ProgressDB.onSync, not interactive)
-        end)
+        end, _("Pushing progress. Please wait…"))
+
+        if success then
+            self.push_timestamp = now
+        end
 
         if on_suspend and Device:hasWifiManager() then
             NetworkMgr:disableWifi()
         end
     end)
-
-    self.push_timestamp = now
 end
 
 function KOSyncCloud:getProgress(ensure_networking, interactive)
@@ -559,11 +549,6 @@ function KOSyncCloud:getProgress(ensure_networking, interactive)
         return
     end
 
-    if ensure_networking and willRerunForServer(self.settings.sync_server, function()
-        self:getProgress(ensure_networking, interactive)
-    end) then
-        return
-    end
 
     local doc_digest = self:getDocumentDigest()
     if not doc_digest then
@@ -574,12 +559,16 @@ function KOSyncCloud:getProgress(ensure_networking, interactive)
     logger.dbg("KOSyncCloud: getProgress doc_digest", doc_digest)
 
     UIManager:nextTick(function()
-        runWithSyncModal(interactive, function()
+        local success = runWithSyncModal(interactive, function()
             SyncService.sync(self.settings.sync_server, ProgressDB.getPath(), ProgressDB.onSync, not interactive)
-        end)
+        end, _("Pulling progress. Please wait…"))
+
+        if success then
+            self.pull_timestamp = now
+        end
 
         local body = ProgressDB.readProgress(doc_digest)
-        logger.dbg("KOSyncCloud: [Pull] progress for", self.view.document.file)
+        logger.dbg("KOSyncCloud: [Pull] progress for", self.ui.document.file)
         logger.dbg("KOSyncCloud: body:", body)
         if not body or not body.percentage then
             logger.dbg("KOSyncCloud: no progress in DB")
@@ -667,8 +656,6 @@ function KOSyncCloud:getProgress(ensure_networking, interactive)
             end
         end
     end)
-
-    self.pull_timestamp = now
 end
 
 function KOSyncCloud:_onCloseDocument()
