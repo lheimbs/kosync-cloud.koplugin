@@ -191,6 +191,7 @@ function KOSyncCloud:addToMainMenu(menu_items)
     logger.dbg("KOSyncCloud: addToMainMenu")
     menu_items.progress_sync_cloud = {
         text = _("Progress sync (cloud)"),
+        sorting_hint = "tools",
         sub_item_table = {
             {
                 text = _("Cloud sync"),
