@@ -33,10 +33,12 @@ local function createSchema(conn)
 end
 
 function ProgressDB.getPath()
+    logger.dbg("KOSyncCloud: progress DB path", db_location)
     return db_location
 end
 
 function ProgressDB.ensureDB()
+    logger.dbg("KOSyncCloud: ensure progress DB")
     local conn = SQ3.open(db_location)
     createSchema(conn)
     conn:close()
@@ -49,6 +51,7 @@ local function openDB()
 end
 
 function ProgressDB.writeProgress(doc_md5, progress, percentage, timestamp, device, device_id)
+    logger.dbg("KOSyncCloud: write progress", doc_md5, percentage, progress, timestamp, device, device_id)
     local conn = openDB()
     local stmt = conn:prepare([[
         INSERT INTO progress (doc_md5, progress, percentage, timestamp, device, device_id)
@@ -66,14 +69,17 @@ function ProgressDB.writeProgress(doc_md5, progress, percentage, timestamp, devi
 end
 
 function ProgressDB.readProgress(doc_md5)
+    logger.dbg("KOSyncCloud: read progress", doc_md5)
     local conn = openDB()
     local stmt = conn:prepare([[SELECT progress, percentage, timestamp, device, device_id FROM progress WHERE doc_md5 = ?;]])
     local row = stmt:reset():bind(doc_md5):step()
     stmt:close()
     conn:close()
     if not row or not row[1] then
+        logger.dbg("KOSyncCloud: read progress not found", doc_md5)
         return nil
     end
+    logger.dbg("KOSyncCloud: read progress hit", doc_md5)
     return {
         progress = row[1],
         percentage = tonumber(row[2]),
@@ -90,6 +96,7 @@ local function incomeHasTable(conn_income)
 end
 
 function ProgressDB.onSync(local_path, cached_path, income_path)
+    logger.dbg("KOSyncCloud: onSync", local_path, cached_path, income_path)
     local conn_income = SQ3.open(income_path)
     local ok1, v1 = pcall(conn_income.rowexec, conn_income, "PRAGMA schema_version")
     if not ok1 or tonumber(v1) == 0 or not incomeHasTable(conn_income) then
@@ -131,6 +138,7 @@ function ProgressDB.onSync(local_path, cached_path, income_path)
         conn:close()
         return false
     end
+    logger.dbg("KOSyncCloud: progress merge complete")
     pcall(conn.exec, conn, "DETACH income_db;")
     conn:close()
     return true

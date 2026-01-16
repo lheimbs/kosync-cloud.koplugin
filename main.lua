@@ -63,6 +63,7 @@ KOSyncCloud.default_settings = {
 }
 
 function KOSyncCloud:init()
+    logger.dbg("KOSyncCloud: init")
     self.push_timestamp = 0
     self.pull_timestamp = 0
     self.page_update_counter = 0
@@ -78,6 +79,8 @@ function KOSyncCloud:init()
 
     self.settings = G_reader_settings:readSetting("kosync_cloud", self.default_settings)
     self.device_id = G_reader_settings:readSetting("device_id")
+    logger.dbg("KOSyncCloud: settings loaded", self.settings)
+    logger.dbg("KOSyncCloud: device_id", self.device_id)
 
     ProgressDB.ensureDB()
 
@@ -146,6 +149,7 @@ function KOSyncCloud:onDispatcherRegisterActions()
 end
 
 function KOSyncCloud:onReaderReady()
+    logger.dbg("KOSyncCloud: onReaderReady")
     if self.settings.auto_sync then
         UIManager:nextTick(function()
             self:getProgress(true, false)
@@ -158,6 +162,7 @@ function KOSyncCloud:onReaderReady()
 end
 
 function KOSyncCloud:addToMainMenu(menu_items)
+    logger.dbg("KOSyncCloud: addToMainMenu")
     menu_items.progress_sync_cloud = {
         text = _("Progress sync (cloud)"),
         sub_item_table = {
@@ -165,6 +170,7 @@ function KOSyncCloud:addToMainMenu(menu_items)
                 text = _("Cloud sync"),
                 keep_menu_open = true,
                 callback = function(touchmenu_instance)
+                    logger.dbg("KOSyncCloud: open cloud sync menu")
                     local server = self.settings.sync_server
                     local edit_cb = function()
                         local sync_settings = SyncService:new{}
@@ -172,6 +178,7 @@ function KOSyncCloud:addToMainMenu(menu_items)
                             UIManager:close(this)
                         end
                         sync_settings.onConfirm = function(sv)
+                            logger.dbg("KOSyncCloud: cloud sync selected", sv and sv.type, sv and sv.url)
                             if server and (server.type ~= sv.type or server.url ~= sv.url or server.address ~= sv.address) then
                                 SyncService.removeLastSyncDB(ProgressDB.getPath())
                             end
@@ -384,22 +391,27 @@ If set to 0, updating progress based on page turns will be disabled.]]),
 end
 
 function KOSyncCloud:setPagesBeforeUpdate(pages_before_update)
+    logger.dbg("KOSyncCloud: setPagesBeforeUpdate", pages_before_update)
     self.settings.pages_before_update = pages_before_update > 0 and pages_before_update or nil
 end
 
 function KOSyncCloud:setSyncForward(strategy)
+    logger.dbg("KOSyncCloud: setSyncForward", strategy)
     self.settings.sync_forward = strategy
 end
 
 function KOSyncCloud:setSyncBackward(strategy)
+    logger.dbg("KOSyncCloud: setSyncBackward", strategy)
     self.settings.sync_backward = strategy
 end
 
 function KOSyncCloud:setChecksumMethod(method)
+    logger.dbg("KOSyncCloud: setChecksumMethod", method)
     self.settings.checksum_method = method
 end
 
 function KOSyncCloud:canSync()
+    logger.dbg("KOSyncCloud: canSync", self.settings.sync_server ~= nil)
     return self.settings.sync_server ~= nil
 end
 
@@ -420,6 +432,7 @@ function KOSyncCloud:getLastProgress()
 end
 
 function KOSyncCloud:getDocumentDigest()
+    logger.dbg("KOSyncCloud: getDocumentDigest", self.settings.checksum_method)
     if self.settings.checksum_method == CHECKSUM_METHOD.FILENAME then
         return self:getFileNameDigest()
     else
@@ -428,10 +441,12 @@ function KOSyncCloud:getDocumentDigest()
 end
 
 function KOSyncCloud:getFileDigest()
+    logger.dbg("KOSyncCloud: getFileDigest")
     return self.ui.doc_settings:readSetting("partial_md5_checksum")
 end
 
 function KOSyncCloud:getFileNameDigest()
+    logger.dbg("KOSyncCloud: getFileNameDigest")
     local file = self.ui.document.file
     if not file then return end
 
@@ -442,6 +457,7 @@ function KOSyncCloud:getFileNameDigest()
 end
 
 function KOSyncCloud:syncToProgress(progress)
+    logger.dbg("KOSyncCloud: syncToProgress", progress)
     logger.dbg("KOSyncCloud: [Sync] progress to", progress)
     if self.ui.document.info.has_pages then
         self.ui:handleEvent(Event:new("GotoPage", tonumber(progress)))
@@ -459,6 +475,7 @@ local function willRerunForServer(server, cb)
 end
 
 function KOSyncCloud:updateProgress(ensure_networking, interactive, on_suspend)
+    logger.dbg("KOSyncCloud: updateProgress", ensure_networking, interactive, on_suspend)
     if not self:canSync() then
         if interactive then
             promptSetup()
@@ -480,9 +497,11 @@ function KOSyncCloud:updateProgress(ensure_networking, interactive, on_suspend)
 
     local doc_digest = self:getDocumentDigest()
     if not doc_digest then
+        logger.dbg("KOSyncCloud: updateProgress missing doc_digest")
         if interactive then showSyncError() end
         return
     end
+    logger.dbg("KOSyncCloud: updateProgress doc_digest", doc_digest)
     local progress = self:getLastProgress()
     local percentage = self:getLastPercent()
     local timestamp = (self.last_page_turn_timestamp and self.last_page_turn_timestamp > 0)
@@ -501,6 +520,7 @@ function KOSyncCloud:updateProgress(ensure_networking, interactive, on_suspend)
 end
 
 function KOSyncCloud:getProgress(ensure_networking, interactive)
+    logger.dbg("KOSyncCloud: getProgress", ensure_networking, interactive)
     if not self:canSync() then
         if interactive then
             promptSetup()
@@ -522,9 +542,11 @@ function KOSyncCloud:getProgress(ensure_networking, interactive)
 
     local doc_digest = self:getDocumentDigest()
     if not doc_digest then
+        logger.dbg("KOSyncCloud: getProgress missing doc_digest")
         if interactive then showSyncError() end
         return
     end
+    logger.dbg("KOSyncCloud: getProgress doc_digest", doc_digest)
 
     UIManager:nextTick(function()
         SyncService.sync(self.settings.sync_server, ProgressDB.getPath(), ProgressDB.onSync, not interactive)
@@ -533,6 +555,7 @@ function KOSyncCloud:getProgress(ensure_networking, interactive)
         logger.dbg("KOSyncCloud: [Pull] progress for", self.view.document.file)
         logger.dbg("KOSyncCloud: body:", body)
         if not body or not body.percentage then
+            logger.dbg("KOSyncCloud: no progress in DB")
             if interactive then
                 UIManager:show(InfoMessage:new{
                     text = _("No progress found for this document."),
@@ -543,6 +566,7 @@ function KOSyncCloud:getProgress(ensure_networking, interactive)
         end
 
         if body.device == Device.model and body.device_id == self.device_id then
+            logger.dbg("KOSyncCloud: progress already from this device")
             if interactive then
                 UIManager:show(InfoMessage:new{
                     text = _("Latest progress is coming from this device."),
@@ -558,6 +582,7 @@ function KOSyncCloud:getProgress(ensure_networking, interactive)
         logger.dbg("KOSyncCloud: Current progress:", percentage * 100, "% =>", progress)
 
         if percentage == body.percentage or body.progress == progress then
+            logger.dbg("KOSyncCloud: progress already synced")
             if interactive then
                 UIManager:show(InfoMessage:new{
                     text = _("The progress has already been synchronized."),
@@ -568,6 +593,7 @@ function KOSyncCloud:getProgress(ensure_networking, interactive)
         end
 
         if interactive then
+            logger.dbg("KOSyncCloud: interactive pull apply")
             self:syncToProgress(body.progress)
             showSyncedMessage()
             return
@@ -579,11 +605,14 @@ function KOSyncCloud:getProgress(ensure_networking, interactive)
         else
             self_older = (body.percentage > percentage)
         end
+        logger.dbg("KOSyncCloud: compare progress", self_older, body.timestamp, self.last_page_turn_timestamp)
         if self_older then
             if self.settings.sync_forward == SYNC_STRATEGY.SILENT then
+                logger.dbg("KOSyncCloud: sync forward silently")
                 self:syncToProgress(body.progress)
                 showSyncedMessage()
             elseif self.settings.sync_forward == SYNC_STRATEGY.PROMPT then
+                logger.dbg("KOSyncCloud: sync forward prompt")
                 UIManager:show(ConfirmBox:new{
                     text = T(_("Sync to latest location %1% from device '%2'?"),
                              Math.round(body.percentage * 100),
@@ -595,9 +624,11 @@ function KOSyncCloud:getProgress(ensure_networking, interactive)
             end
         else
             if self.settings.sync_backward == SYNC_STRATEGY.SILENT then
+                logger.dbg("KOSyncCloud: sync backward silently")
                 self:syncToProgress(body.progress)
                 showSyncedMessage()
             elseif self.settings.sync_backward == SYNC_STRATEGY.PROMPT then
+                logger.dbg("KOSyncCloud: sync backward prompt")
                 UIManager:show(ConfirmBox:new{
                     text = T(_("Sync to previous location %1% from device '%2'?"),
                              Math.round(body.percentage * 100),
@@ -673,14 +704,17 @@ function KOSyncCloud:_onNetworkDisconnecting()
 end
 
 function KOSyncCloud:onKOSyncCloudPushProgress()
+    logger.dbg("KOSyncCloud: onKOSyncCloudPushProgress")
     self:updateProgress(true, true)
 end
 
 function KOSyncCloud:onKOSyncCloudPullProgress()
+    logger.dbg("KOSyncCloud: onKOSyncCloudPullProgress")
     self:getProgress(true, true)
 end
 
 function KOSyncCloud:onKOSyncCloudToggleAutoSync(toggle, from_menu)
+    logger.dbg("KOSyncCloud: onKOSyncCloudToggleAutoSync", toggle, from_menu)
     if toggle == self.settings.auto_sync then
         return true
     end
@@ -708,6 +742,7 @@ function KOSyncCloud:onKOSyncCloudToggleAutoSync(toggle, from_menu)
 end
 
 function KOSyncCloud:registerEvents()
+    logger.dbg("KOSyncCloud: registerEvents", self.settings.auto_sync)
     if self.settings.auto_sync then
         self.onCloseDocument = self._onCloseDocument
         self.onPageUpdate = self._onPageUpdate
