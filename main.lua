@@ -136,6 +136,29 @@ local function promptSetup()
     })
 end
 
+local function runWithSyncModal(interactive, fn, message)
+    if not interactive then
+        logger.dbg("KOSyncCloud: sync (non-interactive)")
+        return fn()
+    end
+
+    local modal = InfoMessage:new{
+        text = message or _("Syncing progress. Please wait…"),
+        timeout = nil,
+        dismissable = false,
+    }
+    logger.dbg("KOSyncCloud: sync modal show")
+    UIManager:show(modal)
+
+    local ok, err = pcall(fn)
+    UIManager:close(modal)
+    logger.dbg("KOSyncCloud: sync modal close")
+    if not ok then
+        logger.err("KOSyncCloud: sync failed", err)
+        showSyncError()
+    end
+end
+
 function KOSyncCloud:onDispatcherRegisterActions()
     Dispatcher:registerAction("kosync_cloud_set_autosync",
         { category="string", event="KOSyncCloudToggleAutoSync", title=_("Set auto progress sync (cloud)"), reader=true,
@@ -508,8 +531,10 @@ function KOSyncCloud:updateProgress(ensure_networking, interactive, on_suspend)
         and self.last_page_turn_timestamp or os.time()
 
     UIManager:nextTick(function()
-        ProgressDB.writeProgress(doc_digest, progress, percentage, timestamp, Device.model, self.device_id)
-        SyncService.sync(self.settings.sync_server, ProgressDB.getPath(), ProgressDB.onSync, not interactive)
+        runWithSyncModal(interactive, function()
+            ProgressDB.writeProgress(doc_digest, progress, percentage, timestamp, Device.model, self.device_id)
+            SyncService.sync(self.settings.sync_server, ProgressDB.getPath(), ProgressDB.onSync, not interactive)
+        end)
 
         if on_suspend and Device:hasWifiManager() then
             NetworkMgr:disableWifi()
@@ -549,7 +574,9 @@ function KOSyncCloud:getProgress(ensure_networking, interactive)
     logger.dbg("KOSyncCloud: getProgress doc_digest", doc_digest)
 
     UIManager:nextTick(function()
-        SyncService.sync(self.settings.sync_server, ProgressDB.getPath(), ProgressDB.onSync, not interactive)
+        runWithSyncModal(interactive, function()
+            SyncService.sync(self.settings.sync_server, ProgressDB.getPath(), ProgressDB.onSync, not interactive)
+        end)
 
         local body = ProgressDB.readProgress(doc_digest)
         logger.dbg("KOSyncCloud: [Pull] progress for", self.view.document.file)
