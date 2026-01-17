@@ -1,29 +1,30 @@
 # File-based read progress sync using cloud services
 
-Read progress synchronization for KOReader using a configured cloud service (SyncService).
+Synchronize your read progress with the same cloud provider you use for your your books or your Reading Statistics (Dropbox/WebDAV/FTP/...).
 
-## Overview
+This adds a file-based alternative to the HTTP-based [Progress Sync](https://github.com/koreader/koreader/wiki/Progress-sync) service if you are already using another cloud sync service and don't want to depend on yet another service.
 
-This plugin syncs reading progress by storing progress records in a local SQLite database and synchronizing that database via the existing SyncService (WebDAV/Dropbox). It mirrors KOSync’s behavior and settings while replacing the HTTP server with file-based cloud sync.
+## Installation
 
-## Setup
-
-1. Configure a cloud service and select a folder.
-2. Open the plugin menu “Progress sync (cloud)”.
-3. Select “Cloud sync” and choose the same cloud folder on each device.
+1. Copy this folder to your KOReader `plugins` directory (make sure it is named `kosync-cloud.koplugin`)
+1. Restart KOReader.
+1. Enable **Progress sync (cloud)** from the plugins menu.
 
 ## Usage
 
+Cloud service based progress sync is managed from the tools-menu:
+-- TODO: image ![Progress sync (cloud) settings header]()
+
+The settings mimic the original Progress sync plugin:
+
+- Enable auto sync to sync on suspend/resume and (optionally) on periodic page turns.
 - Use “Push progress from this device now” to upload current progress.
 - Use “Pull progress from other devices now” to download the latest progress.
-- Enable auto sync to sync on suspend/resume and on periodic page turns.
+- Configure the sync behavior when a newer or older state is detected: Either prompt, accept the state silently or ignore the state.
+- Configure how documents are matched: Either syncing only identical files or match files based on the file name.
 
 ## Data storage
 
-- Local DB: settings directory, file `kosync_cloud_progress.sqlite3`.
-- Records are keyed by document digest (MD5, file- or content-based).
-
-## Notes
-
-- The plugin is file-sync based and does not require the KOReader Sync HTTP server.
-- Sync logic uses the same merge strategy pattern as the Statistics plugin.
+The progress is stored in a sqlite database which is then synced to the cloud storage.
+The database is named `kosync_cloud_progress.sqlite3`.
+Records (ie. books) are keyed by document digest (MD5, file- or content-based depending on the document matching setting).
