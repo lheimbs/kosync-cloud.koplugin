@@ -506,6 +506,9 @@ function KOSyncCloud:updateProgress(ensure_networking, interactive, on_suspend)
         return
     end
 
+    if ensure_networking and NetworkMgr:willRerunWhenOnline(function() self:updateProgress(ensure_networking, interactive, on_suspend) end) then
+        return
+    end
 
     local doc_digest = self:getDocumentDigest()
     if not doc_digest then
@@ -550,6 +553,9 @@ function KOSyncCloud:getProgress(ensure_networking, interactive)
         return
     end
 
+    if ensure_networking and NetworkMgr:willRerunWhenOnline(function() self:getProgress(ensure_networking, interactive) end) then
+        return
+    end
 
     local doc_digest = self:getDocumentDigest()
     if not doc_digest then
