@@ -17,6 +17,7 @@ local time = require("ui/time")
 local util = require("util")
 local T = require("ffi/util").template
 local ProgressDB = require("progressdb")
+local WireGuard = require("wireguard")
 local _ = require("gettext")
 
 if G_reader_settings:hasNot("device_id") then
@@ -60,6 +61,7 @@ KOSyncCloud.default_settings = {
     sync_forward = SYNC_STRATEGY.PROMPT,
     sync_backward = SYNC_STRATEGY.DISABLE,
     checksum_method = CHECKSUM_METHOD.BINARY,
+    wireguard_config = nil,
 }
 
 function KOSyncCloud:init()
@@ -413,6 +415,38 @@ If set to 0, updating progress based on page turns will be disabled.]]),
                     },
                 }
             },
+            {
+                text = _("WireGuard VPN (SOCKS5 proxy)"),
+                separator = true,
+                sub_item_table = {
+                    {
+                        text_func = function()
+                            local cfg = self.settings.wireguard_config
+                            if cfg then
+                                local _, name = util.splitFilePathName(cfg)
+                                return T(_("Config: %1"), name or cfg)
+                            end
+                            return _("Select WireGuard config…")
+                        end,
+                        keep_menu_open = true,
+                        callback = function(touchmenu_instance)
+                            self:selectWireGuardConfig(touchmenu_instance)
+                        end,
+                    },
+                    {
+                        text = _("Clear WireGuard config"),
+                        enabled_func = function()
+                            return self.settings.wireguard_config ~= nil
+                        end,
+                        callback = function(touchmenu_instance)
+                            self.settings.wireguard_config = nil
+                            if touchmenu_instance then
+                                touchmenu_instance:updateItems()
+                            end
+                        end,
+                    },
+                },
+            },
         }
     }
 end
@@ -435,6 +469,32 @@ end
 function KOSyncCloud:setChecksumMethod(method)
     logger.dbg("KOSyncCloud: setChecksumMethod", method)
     self.settings.checksum_method = method
+end
+
+--- Open a file-browser dialog filtered to *.conf files so the user can
+-- select their WireGuard configuration.
+-- @tparam table touchmenu_instance  the open menu, used to refresh items
+function KOSyncCloud:selectWireGuardConfig(touchmenu_instance)
+    logger.dbg("KOSyncCloud: selectWireGuardConfig")
+    local FileChooser = require("ui/widget/filechooser")
+    local home = os.getenv("HOME") or "/"
+    local chooser = FileChooser:new{
+        path = home,
+        -- Show .conf files and directories for navigation
+        filter = function(filename, attr)
+            if attr and attr.mode == "directory" then return true end
+            return filename:match("%.conf$") ~= nil
+        end,
+        select_callback = function(filepath)
+            logger.dbg("KOSyncCloud: WireGuard config selected", filepath)
+            self.settings.wireguard_config = filepath
+            UIManager:close(chooser)
+            if touchmenu_instance then
+                touchmenu_instance:updateItems()
+            end
+        end,
+    }
+    UIManager:show(chooser)
 end
 
 function KOSyncCloud:canSync()
@@ -524,8 +584,10 @@ function KOSyncCloud:updateProgress(ensure_networking, interactive, on_suspend)
 
     UIManager:nextTick(function()
         local success = runWithSyncModal(interactive, function()
-            ProgressDB.writeProgress(doc_digest, progress, percentage, timestamp, Device.model, self.device_id)
-            SyncService.sync(self.settings.sync_server, ProgressDB.getPath(), ProgressDB.onSync, not interactive)
+            WireGuard.runWithProxy(self.settings.wireguard_config, function()
+                ProgressDB.writeProgress(doc_digest, progress, percentage, timestamp, Device.model, self.device_id)
+                SyncService.sync(self.settings.sync_server, ProgressDB.getPath(), ProgressDB.onSync, not interactive)
+            end)
         end, _("Pushing progress. Please wait…"))
 
         if success then
@@ -567,7 +629,9 @@ function KOSyncCloud:getProgress(ensure_networking, interactive)
 
     UIManager:nextTick(function()
         local success = runWithSyncModal(interactive, function()
-            SyncService.sync(self.settings.sync_server, ProgressDB.getPath(), ProgressDB.onSync, not interactive)
+            WireGuard.runWithProxy(self.settings.wireguard_config, function()
+                SyncService.sync(self.settings.sync_server, ProgressDB.getPath(), ProgressDB.onSync, not interactive)
+            end)
         end, _("Pulling progress. Please wait…"))
 
         if success then
