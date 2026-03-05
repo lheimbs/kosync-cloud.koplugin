@@ -2,11 +2,12 @@
 -- Manages wireproxy lifecycle to provide a SOCKS5 proxy for WebDAV
 -- sync via a WireGuard VPN tunnel.
 --
--- The wireproxy binary (bundled in bin/wireproxy) is started as a
--- subprocess with a temporary config that appends a [Socks5] section
--- to the user-supplied WireGuard .conf file, binding on 127.0.0.1:1080.
--- Proxy environment variables are set for the duration of the sync and
--- restored afterwards.
+-- The user must compile wireproxy themselves (see README.md) and
+-- select the binary path from the plugin settings. At sync time the
+-- module copies the user-supplied WireGuard .conf, appends a [Socks5]
+-- section binding on 127.0.0.1:1080, starts wireproxy as a subprocess,
+-- sets proxy environment variables, runs the sync, then tears everything
+-- down.
 --
 -- @module wireguard
 
@@ -19,15 +20,6 @@ local WireGuard = {}
 -- ---------------------------------------------------------------------------
 -- Constants
 -- ---------------------------------------------------------------------------
-
---- Absolute path to the wireproxy binary bundled with this plugin.
-local WIREPROXY_BIN = (function()
-    local src = debug.getinfo(1, "S").source
-    -- source starts with "@" for file-based modules
-    local path = src:match("^@(.+)$") or src
-    local dir = path:match("^(.+)/[^/]+$") or "."
-    return dir .. "/bin/wireproxy"
-end)()
 
 --- SOCKS5 proxy host that wireproxy binds to.
 local SOCKS5_HOST = "127.0.0.1"
@@ -106,24 +98,19 @@ end
 -- Public API
 -- ---------------------------------------------------------------------------
 
---- Check whether the bundled wireproxy binary exists and is a regular file.
--- @treturn boolean true if wireproxy is present
-function WireGuard.isAvailable()
+--- Check whether a wireproxy binary exists at the given path.
+-- @tparam  string binary_path  path to the wireproxy binary
+-- @treturn boolean true if the file exists
+function WireGuard.isAvailable(binary_path)
+    if not binary_path then return false end
     local ok, lfs = pcall(require, "lfs")
     if not ok then
-        -- Fallback: try to open the file
-        local f = io.open(WIREPROXY_BIN, "rb")
+        local f = io.open(binary_path, "rb")
         if f then f:close(); return true end
         return false
     end
-    local attr = lfs.attributes(WIREPROXY_BIN)
+    local attr = lfs.attributes(binary_path)
     return attr ~= nil and attr.mode == "file"
-end
-
---- Return the absolute path to the bundled wireproxy binary.
--- @treturn string path to wireproxy binary
-function WireGuard.getBinaryPath()
-    return WIREPROXY_BIN
 end
 
 --- Return the SOCKS5 proxy URL that wireproxy binds to.
@@ -160,9 +147,9 @@ function WireGuard.prepareTempConfig(config_path)
         .. string.format("\n\n[Socks5]\nBindAddress = %s:%d\n", SOCKS5_HOST, SOCKS5_PORT)
 
     -- Write to a private temp file inside KOReader's data directory.
-    -- Include the current PID to avoid collisions with concurrent instances.
-    local out_path = string.format("%s/kosync_cloud_wg_%d.conf",
-        DataStorage:getDataDir(), os.time())
+    -- Include timestamp and a random suffix to avoid collisions.
+    local out_path = string.format("%s/kosync_cloud_wg_%d_%d.conf",
+        DataStorage:getDataDir(), os.time(), math.random(100000, 999999))
     local fw, write_err = io.open(out_path, "w")
     if not fw then
         return nil, "Cannot write temp config: " .. (write_err or "unknown error")
@@ -184,32 +171,33 @@ function WireGuard.prepareTempConfig(config_path)
     return out_path
 end
 
---- Start the wireproxy subprocess using the given WireGuard config file.
+--- Start the wireproxy subprocess using the given settings.
 -- Prepares a temporary config (adding [Socks5]), launches wireproxy in
 -- the background, and waits up to TUNNEL_WAIT_TIMEOUT seconds for the
 -- SOCKS5 proxy to become reachable.
+-- @tparam  string  binary_path path to the wireproxy binary
 -- @tparam  string  config_path path to the source WireGuard .conf file
 -- @treturn boolean true on success
 -- @treturn nil|string  error message on failure
-function WireGuard.start(config_path)
-    logger.dbg("WireGuard: start", config_path)
+function WireGuard.start(binary_path, config_path)
+    logger.dbg("WireGuard: start", binary_path, config_path)
 
     if wireproxy_pid then
         logger.warn("WireGuard: already running with PID", wireproxy_pid)
         return true
     end
 
-    if not WireGuard.isAvailable() then
-        return false, "wireproxy binary not found at " .. WIREPROXY_BIN
+    if not WireGuard.isAvailable(binary_path) then
+        return false, "wireproxy binary not found at " .. tostring(binary_path)
     end
 
     -- Ensure the binary is executable.
     -- Use FFI chmod when available to avoid shell command injection risks.
     local ffi = get_ffi()
     if ffi then
-        ffi.C.chmod(WIREPROXY_BIN, 0x1ED) -- 0755 octal
+        ffi.C.chmod(binary_path, 0x1ED) -- 0755 octal
     else
-        os.execute("chmod +x " .. sh_quote(WIREPROXY_BIN))
+        os.execute("chmod +x " .. sh_quote(binary_path))
     end
 
     local tconfig, prep_err = WireGuard.prepareTempConfig(config_path)
@@ -219,7 +207,7 @@ function WireGuard.start(config_path)
 
     -- Start wireproxy in the background; capture its PID via `echo $!`
     local cmd = string.format('%s -c %s & echo $!',
-        sh_quote(WIREPROXY_BIN), sh_quote(tconfig))
+        sh_quote(binary_path), sh_quote(tconfig))
     local pipe = io.popen(cmd)
     if not pipe then
         return false, "Failed to start wireproxy subprocess"
@@ -301,21 +289,51 @@ function WireGuard.clearProxyEnv(originals)
     logger.dbg("WireGuard: proxy env restored")
 end
 
+--- Test the WireGuard connection by starting wireproxy, verifying
+-- that the SOCKS5 proxy becomes reachable, and then tearing it down.
+-- @tparam  string  binary_path path to the wireproxy binary
+-- @tparam  string  config_path path to the WireGuard .conf file
+-- @treturn boolean true if the SOCKS5 proxy was reachable
+-- @treturn string  human-readable status message
+function WireGuard.testConnection(binary_path, config_path)
+    logger.dbg("WireGuard: testConnection", binary_path, config_path)
+
+    if not binary_path then
+        return false, "No wireproxy binary configured."
+    end
+    if not config_path then
+        return false, "No WireGuard config selected."
+    end
+    if not WireGuard.isAvailable(binary_path) then
+        return false, "wireproxy binary not found at:\n" .. binary_path
+    end
+
+    local started, start_err = WireGuard.start(binary_path, config_path)
+    if not started then
+        return false, "Failed to start wireproxy:\n" .. (start_err or "unknown error")
+    end
+
+    -- Proxy is up if we got here (start already waited for it)
+    WireGuard.stop()
+    return true, "SOCKS5 proxy came up successfully on " .. WireGuard.getProxyURL()
+end
+
 --- Execute a function with the WireGuard SOCKS5 proxy active.
--- If @p config_path is nil, @p fn is called directly without any proxy.
--- Otherwise wireproxy is started, proxy environment variables are set,
--- @p fn is called, and then everything is cleaned up.  Any error raised
--- by @p fn is re-raised after cleanup.
+-- If @p binary_path or @p config_path is nil, @p fn is called directly
+-- without any proxy.  Otherwise wireproxy is started, proxy environment
+-- variables are set, @p fn is called, and then everything is cleaned up.
+-- Any error raised by @p fn is re-raised after cleanup.
+-- @tparam  string|nil  binary_path wireproxy binary path, or nil to skip
 -- @tparam  string|nil  config_path WireGuard .conf path, or nil to skip
 -- @tparam  function    fn          function to execute
 -- @return any value(s) returned by @p fn
-function WireGuard.runWithProxy(config_path, fn)
-    if not config_path then
+function WireGuard.runWithProxy(binary_path, config_path, fn)
+    if not binary_path or not config_path then
         return fn()
     end
 
     logger.dbg("WireGuard: runWithProxy with config", config_path)
-    local started, start_err = WireGuard.start(config_path)
+    local started, start_err = WireGuard.start(binary_path, config_path)
     if not started then
         logger.err("WireGuard: could not start proxy:", start_err)
         -- Proceed without proxy rather than silently blocking the sync

@@ -62,6 +62,7 @@ KOSyncCloud.default_settings = {
     sync_backward = SYNC_STRATEGY.DISABLE,
     checksum_method = CHECKSUM_METHOD.BINARY,
     wireguard_config = nil,
+    wireguard_binary = nil,
 }
 
 function KOSyncCloud:init()
@@ -421,6 +422,20 @@ If set to 0, updating progress based on page turns will be disabled.]]),
                 sub_item_table = {
                     {
                         text_func = function()
+                            local bin = self.settings.wireguard_binary
+                            if bin then
+                                local _, name = util.splitFilePathName(bin)
+                                return T(_("Binary: %1"), name or bin)
+                            end
+                            return _("Select wireproxy binary…")
+                        end,
+                        keep_menu_open = true,
+                        callback = function(touchmenu_instance)
+                            self:selectWireGuardBinary(touchmenu_instance)
+                        end,
+                    },
+                    {
+                        text_func = function()
                             local cfg = self.settings.wireguard_config
                             if cfg then
                                 local _, name = util.splitFilePathName(cfg)
@@ -434,12 +449,25 @@ If set to 0, updating progress based on page turns will be disabled.]]),
                         end,
                     },
                     {
-                        text = _("Clear WireGuard config"),
+                        text = _("Test connection"),
+                        enabled_func = function()
+                            return self.settings.wireguard_binary ~= nil
+                                and self.settings.wireguard_config ~= nil
+                        end,
+                        callback = function()
+                            self:testWireGuardConnection()
+                        end,
+                        separator = true,
+                    },
+                    {
+                        text = _("Clear WireGuard settings"),
                         enabled_func = function()
                             return self.settings.wireguard_config ~= nil
+                                or self.settings.wireguard_binary ~= nil
                         end,
                         callback = function(touchmenu_instance)
                             self.settings.wireguard_config = nil
+                            self.settings.wireguard_binary = nil
                             if touchmenu_instance then
                                 touchmenu_instance:updateItems()
                             end
@@ -471,6 +499,27 @@ function KOSyncCloud:setChecksumMethod(method)
     self.settings.checksum_method = method
 end
 
+--- Open a file-browser dialog so the user can select the wireproxy binary.
+-- The user must compile wireproxy themselves (see README).
+-- @tparam table touchmenu_instance  the open menu, used to refresh items
+function KOSyncCloud:selectWireGuardBinary(touchmenu_instance)
+    logger.dbg("KOSyncCloud: selectWireGuardBinary")
+    local FileChooser = require("ui/widget/filechooser")
+    local home = os.getenv("HOME") or "/"
+    local chooser = FileChooser:new{
+        path = home,
+        select_callback = function(filepath)
+            logger.dbg("KOSyncCloud: wireproxy binary selected", filepath)
+            self.settings.wireguard_binary = filepath
+            UIManager:close(chooser)
+            if touchmenu_instance then
+                touchmenu_instance:updateItems()
+            end
+        end,
+    }
+    UIManager:show(chooser)
+end
+
 --- Open a file-browser dialog filtered to *.conf files so the user can
 -- select their WireGuard configuration.
 -- @tparam table touchmenu_instance  the open menu, used to refresh items
@@ -495,6 +544,21 @@ function KOSyncCloud:selectWireGuardConfig(touchmenu_instance)
         end,
     }
     UIManager:show(chooser)
+end
+
+--- Start wireproxy with the configured binary and WireGuard config,
+-- verify the SOCKS5 proxy comes up, then tear it down.
+-- Shows a success or error message to the user.
+function KOSyncCloud:testWireGuardConnection()
+    logger.dbg("KOSyncCloud: testWireGuardConnection")
+    local ok, msg = WireGuard.testConnection(
+        self.settings.wireguard_binary,
+        self.settings.wireguard_config
+    )
+    UIManager:show(InfoMessage:new{
+        text = ok and ("✓ " .. msg) or ("✗ " .. msg),
+        timeout = ok and 5 or nil,
+    })
 end
 
 function KOSyncCloud:canSync()
@@ -584,7 +648,7 @@ function KOSyncCloud:updateProgress(ensure_networking, interactive, on_suspend)
 
     UIManager:nextTick(function()
         local success = runWithSyncModal(interactive, function()
-            WireGuard.runWithProxy(self.settings.wireguard_config, function()
+            WireGuard.runWithProxy(self.settings.wireguard_binary, self.settings.wireguard_config, function()
                 ProgressDB.writeProgress(doc_digest, progress, percentage, timestamp, Device.model, self.device_id)
                 SyncService.sync(self.settings.sync_server, ProgressDB.getPath(), ProgressDB.onSync, not interactive)
             end)
@@ -629,7 +693,7 @@ function KOSyncCloud:getProgress(ensure_networking, interactive)
 
     UIManager:nextTick(function()
         local success = runWithSyncModal(interactive, function()
-            WireGuard.runWithProxy(self.settings.wireguard_config, function()
+            WireGuard.runWithProxy(self.settings.wireguard_binary, self.settings.wireguard_config, function()
                 SyncService.sync(self.settings.sync_server, ProgressDB.getPath(), ProgressDB.onSync, not interactive)
             end)
         end, _("Pulling progress. Please wait…"))
