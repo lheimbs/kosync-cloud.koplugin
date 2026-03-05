@@ -512,9 +512,12 @@ function KOSyncCloud:selectWireGuardBinary(touchmenu_instance)
         select_directory = false,
         select_file = true,
         show_files = true,
-        -- Show all files — wireproxy is an extension-less binary that would
-        -- be hidden by KOReader's default document-type filter.
-        file_filter = function() return true end,
+        -- Bypass KOReader's document-type filtering so that all files are
+        -- visible.  We intentionally avoid setting file_filter here because
+        -- PathChooser forces show_unsupported=false when a file_filter is
+        -- present, which can re-enable filtering on some KOReader builds.
+        show_unsupported = true,
+        show_hidden = true,
         path = start_path,
         onConfirm = function(filepath)
             logger.dbg("KOSyncCloud: wireproxy binary selected", filepath)
@@ -540,10 +543,12 @@ function KOSyncCloud:selectWireGuardConfig(touchmenu_instance)
         select_directory = false,
         select_file = true,
         show_files = true,
-        -- Show all files — a .conf filter would be hidden by KOReader's
-        -- document-type filter interaction and prevent the user from finding
-        -- their tunnel config.
-        file_filter = function() return true end,
+        -- Bypass KOReader's document-type filtering so that all files are
+        -- visible.  We intentionally avoid setting file_filter here because
+        -- PathChooser forces show_unsupported=false when a file_filter is
+        -- present, which can re-enable filtering on some KOReader builds.
+        show_unsupported = true,
+        show_hidden = true,
         path = start_path,
         onConfirm = function(filepath)
             logger.dbg("KOSyncCloud: WireGuard config selected", filepath)
