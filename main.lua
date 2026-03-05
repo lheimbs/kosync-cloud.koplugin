@@ -499,66 +499,29 @@ function KOSyncCloud:setChecksumMethod(method)
     self.settings.checksum_method = method
 end
 
---- Open a file-browser dialog so the user can select the wireproxy binary.
--- The user must compile wireproxy themselves (see README).
+--- Set the wireproxy binary path to the plugin directory.
+-- The user must compile wireproxy themselves (see README) and place it
+-- next to this plugin as "wireproxy".
 -- @tparam table touchmenu_instance  the open menu, used to refresh items
 function KOSyncCloud:selectWireGuardBinary(touchmenu_instance)
     logger.dbg("KOSyncCloud: selectWireGuardBinary")
-    local PathChooser = require("ui/widget/pathchooser")
-    local start_path = os.getenv("HOME")
-        or G_reader_settings:readSetting("home_dir")
-        or "/"
-    local chooser = PathChooser:new{
-        select_directory = false,
-        select_file = true,
-        show_files = true,
-        -- Bypass KOReader's document-type filtering so that all files are
-        -- visible.  We intentionally avoid setting file_filter here because
-        -- PathChooser forces show_unsupported=false when a file_filter is
-        -- present, which can re-enable filtering on some KOReader builds.
-        show_unsupported = true,
-        show_hidden = true,
-        path = start_path,
-        onConfirm = function(filepath)
-            logger.dbg("KOSyncCloud: wireproxy binary selected", filepath)
-            self.settings.wireguard_binary = filepath
-            if touchmenu_instance then
-                touchmenu_instance:updateItems()
-            end
-        end,
-    }
-    UIManager:show(chooser)
+    self.settings.wireguard_binary = (self.path or ".") .. "/wireproxy"
+    logger.dbg("KOSyncCloud: wireproxy binary set to", self.settings.wireguard_binary)
+    if touchmenu_instance then
+        touchmenu_instance:updateItems()
+    end
 end
 
---- Open a file-browser dialog so the user can select their WireGuard
--- configuration file.
+--- Set the WireGuard configuration path to the plugin directory.
+-- Place your "wireguard.conf" next to this plugin file.
 -- @tparam table touchmenu_instance  the open menu, used to refresh items
 function KOSyncCloud:selectWireGuardConfig(touchmenu_instance)
     logger.dbg("KOSyncCloud: selectWireGuardConfig")
-    local PathChooser = require("ui/widget/pathchooser")
-    local start_path = os.getenv("HOME")
-        or G_reader_settings:readSetting("home_dir")
-        or "/"
-    local chooser = PathChooser:new{
-        select_directory = false,
-        select_file = true,
-        show_files = true,
-        -- Bypass KOReader's document-type filtering so that all files are
-        -- visible.  We intentionally avoid setting file_filter here because
-        -- PathChooser forces show_unsupported=false when a file_filter is
-        -- present, which can re-enable filtering on some KOReader builds.
-        show_unsupported = true,
-        show_hidden = true,
-        path = start_path,
-        onConfirm = function(filepath)
-            logger.dbg("KOSyncCloud: WireGuard config selected", filepath)
-            self.settings.wireguard_config = filepath
-            if touchmenu_instance then
-                touchmenu_instance:updateItems()
-            end
-        end,
-    }
-    UIManager:show(chooser)
+    self.settings.wireguard_config = (self.path or ".") .. "/wireguard.conf"
+    logger.dbg("KOSyncCloud: WireGuard config set to", self.settings.wireguard_config)
+    if touchmenu_instance then
+        touchmenu_instance:updateItems()
+    end
 end
 
 --- Start wireproxy with the configured binary and WireGuard config,
