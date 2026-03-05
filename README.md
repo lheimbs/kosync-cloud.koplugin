@@ -31,3 +31,51 @@ The settings mimic the original Progress sync plugin:
 The progress is stored in a sqlite database which is synced to the cloud storage.
 The database is named `kosync_cloud_progress.sqlite3`.
 Books are keyed by document digest (MD5, file- or content-based depending on the document matching setting).
+
+## WireGuard VPN support (optional)
+
+The plugin can route sync traffic through a WireGuard VPN tunnel using [wireproxy](https://github.com/pufferffish/wireproxy), which exposes the tunnel as a local SOCKS5 proxy.
+
+### Building wireproxy
+
+You need to cross-compile wireproxy for your device. A static ARM binary is suitable for most Android-based e-readers (Kindle, Kobo, etc.).
+
+**Prerequisites:** [Go](https://go.dev/dl/) 1.21 or later.
+
+```bash
+# Clone wireproxy
+git clone https://github.com/pufferffish/wireproxy.git
+cd wireproxy
+
+# Cross-compile a static ARMv7 binary (Android 4.4+ compatible)
+CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -ldflags="-s -w" -o wireproxy ./cmd/wireproxy
+
+# For AArch64 devices (newer Kobos, etc.)
+# CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o wireproxy ./cmd/wireproxy
+```
+
+Copy the resulting `wireproxy` binary to your device (e.g. into the KOReader directory or any accessible path).
+
+### WireGuard configuration
+
+Create a standard WireGuard configuration file (`.conf`) with your VPN provider or self-hosted server. The plugin will automatically append the necessary `[Socks5]` section at runtime — you do not need to add it yourself. Example:
+
+```ini
+[Interface]
+PrivateKey = <your-private-key>
+Address = 10.0.0.2/32
+DNS = 1.1.1.1
+
+[Peer]
+PublicKey = <server-public-key>
+Endpoint = vpn.example.com:51820
+AllowedIPs = 0.0.0.0/0
+```
+
+### Plugin setup
+
+1. In KOReader, open **Progress sync (cloud) → WireGuard VPN (SOCKS5 proxy)**.
+2. Select the path to your compiled `wireproxy` binary.
+3. Select the path to your WireGuard `.conf` file.
+4. Use **Test connection** to verify the tunnel comes up and the SOCKS5 proxy is reachable.
+5. Once configured, all sync operations will automatically route through the VPN.
