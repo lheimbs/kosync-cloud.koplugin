@@ -504,14 +504,18 @@ end
 -- @tparam table touchmenu_instance  the open menu, used to refresh items
 function KOSyncCloud:selectWireGuardBinary(touchmenu_instance)
     logger.dbg("KOSyncCloud: selectWireGuardBinary")
-    local FileChooser = require("ui/widget/filechooser")
-    local home = os.getenv("HOME") or "/"
-    local chooser = FileChooser:new{
-        path = home,
-        select_callback = function(filepath)
+    local PathChooser = require("ui/widget/pathchooser")
+    local start_path = os.getenv("HOME")
+        or G_reader_settings:readSetting("home_dir")
+        or "/"
+    local chooser = PathChooser:new{
+        select_directory = false,
+        select_file = true,
+        show_files = true,
+        path = start_path,
+        onConfirm = function(filepath)
             logger.dbg("KOSyncCloud: wireproxy binary selected", filepath)
             self.settings.wireguard_binary = filepath
-            UIManager:close(chooser)
             if touchmenu_instance then
                 touchmenu_instance:updateItems()
             end
@@ -525,19 +529,22 @@ end
 -- @tparam table touchmenu_instance  the open menu, used to refresh items
 function KOSyncCloud:selectWireGuardConfig(touchmenu_instance)
     logger.dbg("KOSyncCloud: selectWireGuardConfig")
-    local FileChooser = require("ui/widget/filechooser")
-    local home = os.getenv("HOME") or "/"
-    local chooser = FileChooser:new{
-        path = home,
-        -- Show .conf files and directories for navigation
-        filter = function(filename, attr)
-            if attr and attr.mode == "directory" then return true end
+    local PathChooser = require("ui/widget/pathchooser")
+    local start_path = os.getenv("HOME")
+        or G_reader_settings:readSetting("home_dir")
+        or "/"
+    local chooser = PathChooser:new{
+        select_directory = false,
+        select_file = true,
+        show_files = true,
+        -- Show only .conf files (directories are always shown for navigation)
+        file_filter = function(filename)
             return filename:match("%.conf$") ~= nil
         end,
-        select_callback = function(filepath)
+        path = start_path,
+        onConfirm = function(filepath)
             logger.dbg("KOSyncCloud: WireGuard config selected", filepath)
             self.settings.wireguard_config = filepath
-            UIManager:close(chooser)
             if touchmenu_instance then
                 touchmenu_instance:updateItems()
             end
