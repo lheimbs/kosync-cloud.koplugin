@@ -289,11 +289,110 @@ function WireGuard.clearProxyEnv(originals)
     logger.dbg("WireGuard: proxy env restored")
 end
 
---- Test the WireGuard connection by starting wireproxy, verifying
--- that the SOCKS5 proxy becomes reachable, and then tearing it down.
+--- Send real traffic through the running SOCKS5 proxy to verify that the
+-- WireGuard tunnel is actually routing packets to the outside world.
+--
+-- Strategy:
+--   1. curl  (preferred): makes a full HTTP GET through the proxy.
+--      Uses the socks5h:// scheme so that DNS is also resolved via the tunnel.
+--   2. luasocket fallback: performs a raw SOCKS5 CONNECT handshake to
+--      1.1.1.1:80 (Cloudflare HTTP) using a hard-coded IPv4 address so
+--      that DNS is not required.
+--
+-- @treturn boolean|nil  true = traffic flows, false = tunnel broken,
+--                       nil  = no test tool available (inconclusive)
+-- @treturn string       human-readable status / error message
+local function testTunnelConnectivity()
+    -- Test target: Cloudflare's IP — globally accessible, no local DNS needed.
+    local TEST_HOST_IP   = "1.1.1.1"
+    local TEST_HOST_PORT = 80
+    local TEST_URL       = "http://" .. TEST_HOST_IP .. "/"
+    -- Use socks5h so that curl resolves the hostname through the tunnel (not locally)
+    local proxy_h_url    = string.format("socks5h://%s:%d", SOCKS5_HOST, SOCKS5_PORT)
+
+    -- ---- Attempt 1: curl ----
+    local curl_check = io.popen("curl --version 2>/dev/null")
+    local has_curl   = curl_check and curl_check:read("*l")
+    if curl_check then curl_check:close() end
+
+    if has_curl then
+        local cmd = string.format(
+            "curl --proxy %s --max-time 10 --connect-timeout 5"
+            .. " -s -o /dev/null -w '%%{http_code}' %s 2>/dev/null",
+            sh_quote(proxy_h_url), sh_quote(TEST_URL))
+        local pipe = io.popen(cmd)
+        if pipe then
+            local result = pipe:read("*a")
+            pipe:close()
+            local code = tonumber(result and result:match("^%s*(%d+)%s*$"))
+            if code and code > 0 then
+                logger.dbg("WireGuard: tunnel test via curl succeeded, HTTP", code)
+                return true, string.format(
+                    "Tunnel working — HTTP %d from %s via %s",
+                    code, TEST_HOST_IP, proxy_h_url)
+            end
+            logger.warn("WireGuard: tunnel test via curl failed, response:", result)
+            return false, string.format(
+                "Tunnel not working — no response from %s via %s",
+                TEST_HOST_IP, proxy_h_url)
+        end
+    end
+
+    -- ---- Attempt 2: raw SOCKS5 CONNECT via luasocket ----
+    local ok_sock, socket = pcall(require, "socket")
+    if not ok_sock or not socket then
+        return nil, "Cannot verify tunnel (curl and luasocket unavailable)"
+    end
+
+    -- Connect to the local SOCKS5 listener
+    local conn, conn_err = socket.connect(SOCKS5_HOST, SOCKS5_PORT)
+    if not conn then
+        return false, "SOCKS5 proxy unreachable: " .. (conn_err or "unknown")
+    end
+    conn:settimeout(10)
+
+    -- SOCKS5 greeting: VER=5, NMETHODS=1, METHOD=0x00 (no auth)
+    conn:send("\x05\x01\x00")
+    local g_resp, g_err = conn:receive(2)
+    if not g_resp or #g_resp < 2
+            or g_resp:byte(1) ~= 0x05 or g_resp:byte(2) ~= 0x00 then
+        conn:close()
+        return false, "SOCKS5 handshake failed: " .. (g_err or "unexpected response")
+    end
+
+    -- SOCKS5 CONNECT request to 1.1.1.1:80
+    -- VER=5 CMD=1(CONNECT) RSV=0 ATYP=1(IPv4) ADDR=1.1.1.1 PORT=80(0x0050)
+    conn:send("\x05\x01\x00\x01\x01\x01\x01\x01\x00\x50")
+    local c_resp, c_err = conn:receive(10)
+    conn:close()
+
+    local SOCKS5_ERRORS = {
+        [1] = "general failure",        [2] = "connection not allowed",
+        [3] = "network unreachable",    [4] = "host unreachable",
+        [5] = "connection refused",     [6] = "TTL expired",
+        [7] = "command not supported",  [8] = "address type not supported",
+    }
+    if c_resp and #c_resp >= 2 and c_resp:byte(2) == 0x00 then
+        logger.dbg("WireGuard: tunnel test via SOCKS5 CONNECT succeeded")
+        return true, string.format(
+            "Tunnel working — connected to %s:%d via SOCKS5",
+            TEST_HOST_IP, TEST_HOST_PORT)
+    end
+    local rep = c_resp and c_resp:byte(2)
+    local rep_msg = rep and (SOCKS5_ERRORS[rep] or ("code " .. rep))
+                    or (c_err or "no response")
+    logger.warn("WireGuard: tunnel test via SOCKS5 CONNECT failed:", rep_msg)
+    return false, string.format(
+        "Tunnel not working — SOCKS5 CONNECT to %s:%d failed: %s",
+        TEST_HOST_IP, TEST_HOST_PORT, rep_msg)
+end
+
+--- Test the WireGuard connection end-to-end: start wireproxy, confirm the
+-- SOCKS5 proxy is up, then verify that real traffic reaches the internet
+-- through the tunnel, then tear wireproxy down.
 -- @tparam  string  binary_path path to the wireproxy binary
 -- @tparam  string  config_path path to the WireGuard .conf file
--- @treturn boolean true if the SOCKS5 proxy was reachable
+-- @treturn boolean true if the tunnel is working
 -- @treturn string  human-readable status message
 function WireGuard.testConnection(binary_path, config_path)
     logger.dbg("WireGuard: testConnection", binary_path, config_path)
@@ -313,9 +412,19 @@ function WireGuard.testConnection(binary_path, config_path)
         return false, "Failed to start wireproxy:\n" .. (start_err or "unknown error")
     end
 
-    -- Proxy is up if we got here (start already waited for it)
+    -- Verify real traffic flows through the WireGuard tunnel before reporting
+    -- success.  testTunnelConnectivity() is called while wireproxy is still
+    -- running so it can actually send packets through the tunnel.
+    local ok, msg = testTunnelConnectivity()
     WireGuard.stop()
-    return true, "SOCKS5 proxy came up successfully on " .. WireGuard.getProxyURL()
+
+    if ok == nil then
+        -- No test tool available — proxy came up so we optimistically succeed
+        return true, string.format(
+            "SOCKS5 proxy is up on %s\n(end-to-end tunnel verification unavailable)",
+            WireGuard.getProxyURL())
+    end
+    return ok, msg
 end
 
 --- Execute a function with the WireGuard SOCKS5 proxy active.
