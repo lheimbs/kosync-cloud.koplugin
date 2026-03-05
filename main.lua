@@ -61,8 +61,7 @@ KOSyncCloud.default_settings = {
     sync_forward = SYNC_STRATEGY.PROMPT,
     sync_backward = SYNC_STRATEGY.DISABLE,
     checksum_method = CHECKSUM_METHOD.BINARY,
-    wireguard_config = nil,
-    wireguard_binary = nil,
+    wireguard_enabled = false,
 }
 
 function KOSyncCloud:init()
@@ -422,55 +421,45 @@ If set to 0, updating progress based on page turns will be disabled.]]),
                 sub_item_table = {
                     {
                         text_func = function()
-                            local bin = self.settings.wireguard_binary
-                            if bin then
-                                local _, name = util.splitFilePathName(bin)
-                                return T(_("Binary: %1"), name or bin)
+                            if WireGuard.isAvailable(self:getWireGuardBinaryPath()) then
+                                return _("Wireproxy binary: found ✓")
+                            else
+                                return _("Wireproxy binary: not found ✗")
                             end
-                            return _("Select wireproxy binary…")
                         end,
-                        keep_menu_open = true,
-                        callback = function(touchmenu_instance)
-                            self:selectWireGuardBinary(touchmenu_instance)
-                        end,
+                        callback = function() end,
                     },
                     {
                         text_func = function()
-                            local cfg = self.settings.wireguard_config
-                            if cfg then
-                                local _, name = util.splitFilePathName(cfg)
-                                return T(_("Config: %1"), name or cfg)
+                            if WireGuard.isAvailable(self:getWireGuardConfigPath()) then
+                                return _("WireGuard config: found ✓")
+                            else
+                                return _("WireGuard config: not found ✗")
                             end
-                            return _("Select WireGuard config…")
                         end,
-                        keep_menu_open = true,
-                        callback = function(touchmenu_instance)
-                            self:selectWireGuardConfig(touchmenu_instance)
+                        callback = function() end,
+                    },
+                    {
+                        text = _("Enable WireGuard proxy"),
+                        checked_func = function()
+                            return self.settings.wireguard_enabled
+                        end,
+                        enabled_func = function()
+                            return WireGuard.isAvailable(self:getWireGuardBinaryPath())
+                                and WireGuard.isAvailable(self:getWireGuardConfigPath())
+                        end,
+                        callback = function()
+                            self.settings.wireguard_enabled = not self.settings.wireguard_enabled
                         end,
                     },
                     {
                         text = _("Test connection"),
                         enabled_func = function()
-                            return self.settings.wireguard_binary ~= nil
-                                and self.settings.wireguard_config ~= nil
+                            return WireGuard.isAvailable(self:getWireGuardBinaryPath())
+                                and WireGuard.isAvailable(self:getWireGuardConfigPath())
                         end,
                         callback = function()
                             self:testWireGuardConnection()
-                        end,
-                        separator = true,
-                    },
-                    {
-                        text = _("Clear WireGuard settings"),
-                        enabled_func = function()
-                            return self.settings.wireguard_config ~= nil
-                                or self.settings.wireguard_binary ~= nil
-                        end,
-                        callback = function(touchmenu_instance)
-                            self.settings.wireguard_config = nil
-                            self.settings.wireguard_binary = nil
-                            if touchmenu_instance then
-                                touchmenu_instance:updateItems()
-                            end
                         end,
                     },
                 },
@@ -499,39 +488,26 @@ function KOSyncCloud:setChecksumMethod(method)
     self.settings.checksum_method = method
 end
 
---- Set the wireproxy binary path to the plugin directory.
--- The user must compile wireproxy themselves (see README) and place it
--- next to this plugin as "wireproxy".
--- @tparam table touchmenu_instance  the open menu, used to refresh items
-function KOSyncCloud:selectWireGuardBinary(touchmenu_instance)
-    logger.dbg("KOSyncCloud: selectWireGuardBinary")
-    self.settings.wireguard_binary = (self.path or ".") .. "/wireproxy"
-    logger.dbg("KOSyncCloud: wireproxy binary set to", self.settings.wireguard_binary)
-    if touchmenu_instance then
-        touchmenu_instance:updateItems()
-    end
+--- Return the path to the wireproxy binary in the plugin directory.
+-- @treturn string path to plugin_dir/wireproxy
+function KOSyncCloud:getWireGuardBinaryPath()
+    return (self.path or ".") .. "/wireproxy"
 end
 
---- Set the WireGuard configuration path to the plugin directory.
--- Place your "wireguard.conf" next to this plugin file.
--- @tparam table touchmenu_instance  the open menu, used to refresh items
-function KOSyncCloud:selectWireGuardConfig(touchmenu_instance)
-    logger.dbg("KOSyncCloud: selectWireGuardConfig")
-    self.settings.wireguard_config = (self.path or ".") .. "/wireguard.conf"
-    logger.dbg("KOSyncCloud: WireGuard config set to", self.settings.wireguard_config)
-    if touchmenu_instance then
-        touchmenu_instance:updateItems()
-    end
+--- Return the path to the WireGuard config file in the plugin directory.
+-- @treturn string path to plugin_dir/wireguard.conf
+function KOSyncCloud:getWireGuardConfigPath()
+    return (self.path or ".") .. "/wireguard.conf"
 end
 
---- Start wireproxy with the configured binary and WireGuard config,
+--- Start wireproxy with the hardcoded binary and WireGuard config paths,
 -- verify the SOCKS5 proxy comes up, then tear it down.
 -- Shows a success or error message to the user.
 function KOSyncCloud:testWireGuardConnection()
     logger.dbg("KOSyncCloud: testWireGuardConnection")
     local ok, msg = WireGuard.testConnection(
-        self.settings.wireguard_binary,
-        self.settings.wireguard_config
+        self:getWireGuardBinaryPath(),
+        self:getWireGuardConfigPath()
     )
     UIManager:show(InfoMessage:new{
         text = ok and ("✓ " .. msg) or ("✗ " .. msg),
@@ -626,10 +602,13 @@ function KOSyncCloud:updateProgress(ensure_networking, interactive, on_suspend)
 
     UIManager:nextTick(function()
         local success = runWithSyncModal(interactive, function()
-            WireGuard.runWithProxy(self.settings.wireguard_binary, self.settings.wireguard_config, function()
-                ProgressDB.writeProgress(doc_digest, progress, percentage, timestamp, Device.model, self.device_id)
-                SyncService.sync(self.settings.sync_server, ProgressDB.getPath(), ProgressDB.onSync, not interactive)
-            end)
+            WireGuard.runWithProxy(
+                self.settings.wireguard_enabled and self:getWireGuardBinaryPath() or nil,
+                self.settings.wireguard_enabled and self:getWireGuardConfigPath() or nil,
+                function()
+                    ProgressDB.writeProgress(doc_digest, progress, percentage, timestamp, Device.model, self.device_id)
+                    SyncService.sync(self.settings.sync_server, ProgressDB.getPath(), ProgressDB.onSync, not interactive)
+                end)
         end, _("Pushing progress. Please wait…"))
 
         if success then
@@ -671,9 +650,12 @@ function KOSyncCloud:getProgress(ensure_networking, interactive)
 
     UIManager:nextTick(function()
         local success = runWithSyncModal(interactive, function()
-            WireGuard.runWithProxy(self.settings.wireguard_binary, self.settings.wireguard_config, function()
-                SyncService.sync(self.settings.sync_server, ProgressDB.getPath(), ProgressDB.onSync, not interactive)
-            end)
+            WireGuard.runWithProxy(
+                self.settings.wireguard_enabled and self:getWireGuardBinaryPath() or nil,
+                self.settings.wireguard_enabled and self:getWireGuardConfigPath() or nil,
+                function()
+                    SyncService.sync(self.settings.sync_server, ProgressDB.getPath(), ProgressDB.onSync, not interactive)
+                end)
         end, _("Pulling progress. Please wait…"))
 
         if success then
