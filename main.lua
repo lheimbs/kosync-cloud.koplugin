@@ -13,6 +13,7 @@ local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local logger = require("logger")
 local md5 = require("ffi/sha2").md5
 local random = require("random")
+local socket = require("socket")
 local time = require("ui/time")
 local util = require("util")
 local T = require("ffi/util").template
@@ -134,6 +135,35 @@ local function promptSetup()
         text = _("Please configure a cloud sync service before using progress synchronization."),
         timeout = 3,
     })
+end
+
+local SERVER_REACHABLE_TIMEOUT = 3
+
+local function checkServerReachable(server)
+    local host, port
+    if server.type == "dropbox" then
+        host = "api.dropboxapi.com"
+        port = 443
+    elseif server.type == "webdav" then
+        local address = server.address
+        if not address then return false end
+        local scheme, authority = address:match("^(https?)://([^/]+)")
+        if not authority then return false end
+        host = authority:match("^([^:]+)")
+        port = tonumber(authority:match(":(%d+)"))
+        if not port then
+            port = (scheme == "https") and 443 or 80
+        end
+    else
+        return false
+    end
+    if not host then return false end
+    local sock = socket.tcp()
+    sock:settimeout(SERVER_REACHABLE_TIMEOUT)
+    local ok = sock:connect(host, port)
+    sock:close()
+    logger.dbg("KOSyncCloud: checkServerReachable", host, port, ok ~= nil)
+    return ok ~= nil
 end
 
 local function runWithSyncModal(interactive, fn)
@@ -523,6 +553,14 @@ function KOSyncCloud:updateProgress(ensure_networking, interactive, on_suspend)
         and self.last_page_turn_timestamp or os.time()
 
     UIManager:nextTick(function()
+        if not checkServerReachable(self.settings.sync_server) then
+            logger.dbg("KOSyncCloud: updateProgress server not reachable, skipping")
+            if interactive then showSyncError() end
+            if on_suspend and Device:hasWifiManager() then
+                NetworkMgr:disableWifi()
+            end
+            return
+        end
         local success = runWithSyncModal(interactive, function()
             ProgressDB.writeProgress(doc_digest, progress, percentage, timestamp, Device.model, self.device_id)
             SyncService.sync(self.settings.sync_server, ProgressDB.getPath(), ProgressDB.onSync, not interactive)
@@ -566,6 +604,11 @@ function KOSyncCloud:getProgress(ensure_networking, interactive)
     logger.dbg("KOSyncCloud: getProgress doc_digest", doc_digest)
 
     UIManager:nextTick(function()
+        if not checkServerReachable(self.settings.sync_server) then
+            logger.dbg("KOSyncCloud: getProgress server not reachable, skipping")
+            if interactive then showSyncError() end
+            return
+        end
         local success = runWithSyncModal(interactive, function()
             SyncService.sync(self.settings.sync_server, ProgressDB.getPath(), ProgressDB.onSync, not interactive)
         end, _("Pulling progress. Please wait…"))
