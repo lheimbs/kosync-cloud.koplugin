@@ -604,7 +604,7 @@ function KOSyncCloud:getProgress(ensure_networking, interactive)
     logger.dbg("KOSyncCloud: getProgress doc_digest", doc_digest)
 
     UIManager:nextTick(function()
-        if not checkServerReachable(self.settings.sync_server) then
+        if interactive and not checkServerReachable(self.settings.sync_server) then
             logger.dbg("KOSyncCloud: getProgress server not reachable, skipping")
             if interactive then showSyncError() end
             return
